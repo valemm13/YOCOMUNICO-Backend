@@ -1,4 +1,4 @@
-import { IsUUID, IsEnum, IsNotEmpty } from 'class-validator';
+import { IsUUID, IsEnum, IsNotEmpty, IsOptional } from 'class-validator';
 
 export enum NavigationSelection {
   LEFT = 'LEFT',
@@ -6,8 +6,8 @@ export enum NavigationSelection {
 }
 
 export enum InputSource {
-  HARDWARE_CONTROLLER = 'HARDWARE_CONTROLLER', // Control físico con pulsadores
-  TOUCH_SCREEN = 'TOUCH_SCREEN',               // App en tablet o pantalla táctil
+  HARDWARE_CONTROLLER = 'HARDWARE_CONTROLLER', // Control físico con 2 pulsadores + Mini Proyector
+  TOUCH_SCREEN = 'TOUCH_SCREEN', // Modo Solo Celular o Tablet (Pantalla dividida en 2)
 }
 
 export class NavigateTreeDto {
@@ -28,4 +28,28 @@ export class NavigateTreeDto {
     message: 'El origen debe ser HARDWARE_CONTROLLER o TOUCH_SCREEN',
   })
   source: InputSource;
+}
+
+export class ResetTreeNavigationDto {
+  @IsUUID('4', { message: 'El patientId debe ser un UUID válido' })
+  @IsNotEmpty({ message: 'El ID del paciente es obligatorio' })
+  patientId: string;
+
+  @IsOptional()
+  @IsEnum(InputSource)
+  source?: InputSource;
+}
+
+export class StepBackTreeDto {
+  @IsUUID('4', { message: 'El patientId debe ser un UUID válido' })
+  @IsNotEmpty({ message: 'El ID del paciente es obligatorio' })
+  patientId: string;
+
+  @IsUUID('4', { message: 'El currentNodeId debe ser un UUID válido' })
+  @IsNotEmpty({ message: 'El nodo actual es obligatorio' })
+  currentNodeId: string;
+
+  @IsOptional()
+  @IsEnum(InputSource)
+  source?: InputSource;
 }

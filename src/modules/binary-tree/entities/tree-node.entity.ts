@@ -1,6 +1,14 @@
 // UUID es un identificador universal unico para los pacientes, con este no hay forma de que dos personas
 // tengan el mismo Id y se descifre facilmente cual es el de un paciente especifico, lo cual protege la informacion del paciente
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn,UpdateDateColumn,} from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
 export enum SeverityLevel {
   LOW = 'LOW',
@@ -18,6 +26,10 @@ export class TreeNode {
   @Column({ unique: true })
   code: string;
 
+  // Categoría clínica para agrupar en la vista Excel del médico
+  @Column({ default: 'General UCI' })
+  category: string;
+
   // Texto principal mostrado al paciente en la pantalla/proyector (ej. "Dolor Corporal")
   @Column()
   label: string;
@@ -30,7 +42,7 @@ export class TreeNode {
   @Column({ nullable: true })
   icon: string;
 
-  // Nivel de profundidad en el árbol (0: Raíz, 1: Sub-ramas, 2 o 3: Hojas)
+  // Nivel de profundidad en el árbol (0: Raíz, 1: Sub-ramas, 2 o más: Desglose y Hojas)
   @Column({ type: 'int', default: 0 })
   level: number;
 

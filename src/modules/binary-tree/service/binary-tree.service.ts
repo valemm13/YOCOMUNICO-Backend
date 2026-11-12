@@ -1,9 +1,31 @@
-import { Injectable, NotFoundException, OnModuleInit, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  OnModuleInit,
+  Logger,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TreeNode, SeverityLevel } from '../entities/tree-node.entity';
-import { BinaryPairResponseDto, NodeOptionDto } from '../dtos/binary-response.dto';
-import { NavigateTreeDto, NavigationSelection } from '../dtos/navigate-tree.dto';
+import {
+  BinaryPairResponseDto,
+  NodeOptionDto,
+} from '../dtos/binary-response.dto';
+import {
+  InputSource,
+  NavigateTreeDto,
+  NavigationSelection,
+  ResetTreeNavigationDto,
+  StepBackTreeDto,
+} from '../dtos/navigate-tree.dto';
+import {
+  CLINICAL_BINARY_TREE_SEED,
+  ClinicalSeedNodeSpec,
+} from '../data/clinical-tree-seed.data';
+import { ClinicalRecordsService } from '../../clinical-records/clinical-records.service';
+import { EmergencyService } from '../../emergency/emergency.service';
+import { PatientsService } from '../../patients/patients.service';
+import { SyncService } from '../../sync/sync.service';
 
 @Injectable()
 export class BinaryTreeService implements OnModuleInit {
@@ -12,16 +34,22 @@ export class BinaryTreeService implements OnModuleInit {
   constructor(
     @InjectRepository(TreeNode)
     private readonly treeNodeRepository: Repository<TreeNode>,
+    private readonly clinicalRecordsService: ClinicalRecordsService,
+    private readonly emergencyService: EmergencyService,
+    private readonly patientsService: PatientsService,
+    private readonly syncService: SyncService,
   ) {}
 
   /**
    * Se ejecuta automáticamente al arrancar el servidor.
-   * Si la tabla está vacía, crea el árbol clínico inicial de AGENTS.md.
+   * Si la tabla está vacía o tiene la versión antigua incompleta, pobla el árbol binario clínico completo.
    */
   async onModuleInit(): Promise<void> {
     const count = await this.treeNodeRepository.count();
     if (count === 0) {
-      this.logger.log('🌱 Inicializando árbol binario clínico ...');
+      this.logger.log(
+        '🌱 Inicializando árbol binario clínico exhaustivo UCI...',
+      );
       await this.seedTree();
       this.logger.log('✅ Árbol binario clínico inicializado correctamente.');
     }
@@ -37,11 +65,13 @@ export class BinaryTreeService implements OnModuleInit {
     return {
       id: node.id,
       code: node.code,
+      category: node.category,
       label: node.label,
       description: node.description,
       icon: node.icon,
       isLeaf: node.isLeaf,
       isEmergency: node.isEmergency,
+      severityLevel: node.severityLevel,
     };
   }
 
@@ -58,15 +88,22 @@ export class BinaryTreeService implements OnModuleInit {
     });
 
     if (!root) {
-      throw new NotFoundException('El nodo raíz del árbol no ha sido inicializado');
+      throw new NotFoundException(
+        'El nodo raíz del árbol no ha sido inicializado',
+      );
     }
 
-    return {
+    const pair: BinaryPairResponseDto = {
       currentNodeId: root.id,
+      currentNodeCode: root.code,
+      currentNodeLabel: root.label,
       level: root.level,
       leftNode: this.toOptionDto(root.leftNode),
       rightNode: this.toOptionDto(root.rightNode),
     };
+
+    this.syncService.cacheBinaryPair(root.id, pair);
+    return pair;
   }
 
   /**
@@ -74,6 +111,11 @@ export class BinaryTreeService implements OnModuleInit {
    * Cumple la Regla 1 de AGENTS.md (Payload binario liviano).
    */
   async getBinaryPair(nodeId: string): Promise<BinaryPairResponseDto> {
+    const cached = this.syncService.getCachedBinaryPair(nodeId);
+    if (cached) {
+      return cached;
+    }
+
     const node = await this.treeNodeRepository.findOne({
       where: { id: nodeId },
       relations: {
@@ -86,22 +128,31 @@ export class BinaryTreeService implements OnModuleInit {
       throw new NotFoundException(`Nodo con ID ${nodeId} no encontrado`);
     }
 
-    return {
+    const pair: BinaryPairResponseDto = {
       currentNodeId: node.id,
+      currentNodeCode: node.code,
+      currentNodeLabel: node.label,
       level: node.level,
       leftNode: this.toOptionDto(node.leftNode),
       rightNode: this.toOptionDto(node.rightNode),
     };
+
+    this.syncService.cacheBinaryPair(node.id, pair);
+    return pair;
   }
 
   /**
-   * Procesa la navegación cuando el paciente pulsa el botón IZQUIERDO o DERECHO.
+   * Procesa la navegación cuando el paciente pulsa el botón IZQUIERDO o DERECHO
+   * (tanto desde el Control Físico de 2 Botones + Mini Proyector como desde Modo Solo Celular).
+   * Cumple las Reglas 1, 2, 3 y 5 de AGENTS.md.
    */
   async navigate(dto: NavigateTreeDto): Promise<{
     selectedNode: NodeOptionDto;
     isLeaf: boolean;
     isEmergency: boolean;
     severityLevel: SeverityLevel;
+    clinicalRecordId?: string;
+    emergencyAlertId?: string;
     nextPair: BinaryPairResponseDto | null;
   }> {
     const currentNode = await this.treeNodeRepository.findOne({
@@ -113,25 +164,30 @@ export class BinaryTreeService implements OnModuleInit {
     });
 
     if (!currentNode) {
-      throw new NotFoundException(`Nodo actual con ID ${dto.currentNodeId} no encontrado`);
+      throw new NotFoundException(
+        `Nodo actual con ID ${dto.currentNodeId} no encontrado`,
+      );
     }
 
-    // Determinar qué nodo eligió el paciente
+    // Determinar qué mitad binaria eligió el paciente (descartando la otra mitad)
     const selectedChild =
       dto.selection === NavigationSelection.LEFT
         ? currentNode.leftNode
         : currentNode.rightNode;
 
     if (!selectedChild) {
-      throw new NotFoundException('No existe una opción disponible en la dirección seleccionada');
+      throw new NotFoundException(
+        'No existe una opción disponible en la dirección seleccionada',
+      );
     }
 
-    // Cargar el nodo seleccionado con sus propios hijos (por si no es hoja)
+    // Cargar el nodo seleccionado con sus propios hijos y padre
     const fullSelected = await this.treeNodeRepository.findOne({
       where: { id: selectedChild.id },
       relations: {
         leftNode: true,
         rightNode: true,
+        parentNode: true,
       },
     });
 
@@ -139,15 +195,80 @@ export class BinaryTreeService implements OnModuleInit {
       throw new NotFoundException('Error al cargar el nodo seleccionado');
     }
 
-    // Si ya es un nodo final (hoja), no hay siguiente par
+    // REGLA 3 DE AGENTS.MD: Persistencia auditada de cada pulsación de botón
+    await this.clinicalRecordsService.recordButtonPressAudit({
+      patientId: dto.patientId,
+      fromNode: currentNode,
+      selectedNode: fullSelected,
+      selection: dto.selection,
+      source: dto.source,
+    });
+
+    // REGLA 2 DE AGENTS.MD: Si el nodo es crítico (isEmergency = true), dispara alerta de prioridad máxima
+    let emergencyAlertId: string | undefined;
+    if (fullSelected.isEmergency) {
+      const alert = await this.emergencyService.triggerFromCriticalNode(
+        dto.patientId,
+        fullSelected,
+        dto.source,
+      );
+      emergencyAlertId = alert.id;
+    }
+
+    // Si es un nodo hoja (síntoma o emoción específica alcanzada):
+    // 1. Se envía automáticamente al Excel del paciente en la app del médico (Regla 5)
+    // 2. Se reinicia la posición del paciente al nodo raíz para su próxima comunicación
     let nextPair: BinaryPairResponseDto | null = null;
-    if (!fullSelected.isLeaf) {
+    let clinicalRecordId: string | undefined;
+
+    if (fullSelected.isLeaf) {
+      const breadcrumb = await this.buildBreadcrumbPath(fullSelected);
+      const record =
+        await this.clinicalRecordsService.recordLeafSymptomToPatientExcel({
+          patientId: dto.patientId,
+          leafNode: fullSelected,
+          source: dto.source,
+          navigationBreadcrumb: breadcrumb,
+        });
+      clinicalRecordId = record.id;
+
+      const rootPair = await this.getRootPair();
+      await this.patientsService.updateCurrentNode(
+        dto.patientId,
+        rootPair.currentNodeId,
+      );
+      this.syncService.updatePatientDeviceSession({
+        patientId: dto.patientId,
+        currentNodeId: rootPair.currentNodeId,
+        currentNodeCode: 'ROOT',
+        level: 0,
+        inputMode: dto.source,
+        resetBreadcrumb: true,
+        lastPair: rootPair,
+      });
+    } else {
       nextPair = {
         currentNodeId: fullSelected.id,
+        currentNodeCode: fullSelected.code,
+        currentNodeLabel: fullSelected.label,
         level: fullSelected.level,
         leftNode: this.toOptionDto(fullSelected.leftNode),
         rightNode: this.toOptionDto(fullSelected.rightNode),
       };
+
+      await this.patientsService.updateCurrentNode(
+        dto.patientId,
+        fullSelected.id,
+      );
+      this.syncService.updatePatientDeviceSession({
+        patientId: dto.patientId,
+        currentNodeId: fullSelected.id,
+        currentNodeCode: fullSelected.code,
+        level: fullSelected.level,
+        inputMode: dto.source,
+        selectedLabel: fullSelected.label,
+        lastPair: nextPair,
+      });
     }
 
     return {
@@ -155,414 +276,181 @@ export class BinaryTreeService implements OnModuleInit {
       isLeaf: fullSelected.isLeaf,
       isEmergency: fullSelected.isEmergency,
       severityLevel: fullSelected.severityLevel,
+      clinicalRecordId,
+      emergencyAlertId,
       nextPair,
     };
   }
 
   /**
-   * Pobla la base de datos con toda la estructura clínica estipulada en AGENTS.md.
+   * Reinicia la navegación de un paciente al Nivel 0 (Sección A vs Sección B).
+   */
+  async resetNavigation(
+    dto: ResetTreeNavigationDto,
+  ): Promise<BinaryPairResponseDto> {
+    const rootPair = await this.getRootPair();
+    await this.patientsService.updateCurrentNode(
+      dto.patientId,
+      rootPair.currentNodeId,
+    );
+
+    this.syncService.updatePatientDeviceSession({
+      patientId: dto.patientId,
+      currentNodeId: rootPair.currentNodeId,
+      currentNodeCode: 'ROOT',
+      level: 0,
+      inputMode: dto.source ?? InputSource.TOUCH_SCREEN,
+      resetBreadcrumb: true,
+      lastPair: rootPair,
+    });
+
+    return rootPair;
+  }
+
+  /**
+   * Retrocede un nivel en el árbol binario si el paciente se equivocó de sección.
+   */
+  async stepBack(dto: StepBackTreeDto): Promise<BinaryPairResponseDto> {
+    const currentNode = await this.treeNodeRepository.findOne({
+      where: { id: dto.currentNodeId },
+      relations: { parentNode: true },
+    });
+
+    if (!currentNode || !currentNode.parentNode) {
+      return this.resetNavigation({
+        patientId: dto.patientId,
+        source: dto.source,
+      });
+    }
+
+    const parentPair = await this.getBinaryPair(currentNode.parentNode.id);
+    await this.patientsService.updateCurrentNode(
+      dto.patientId,
+      parentPair.currentNodeId,
+    );
+
+    this.syncService.updatePatientDeviceSession({
+      patientId: dto.patientId,
+      currentNodeId: parentPair.currentNodeId,
+      currentNodeCode: parentPair.currentNodeCode ?? 'ROOT',
+      level: parentPair.level,
+      inputMode: dto.source ?? InputSource.TOUCH_SCREEN,
+      lastPair: parentPair,
+    });
+
+    return parentPair;
+  }
+
+  /**
+   * Recarga/actualiza todo el árbol binario clínico sin perder pacientes.
+   */
+  async reseedClinicalTree(): Promise<{
+    message: string;
+    totalNodes: number;
+    leafNodes: number;
+    emergencyNodes: number;
+  }> {
+    this.syncService.clearTreeCache();
+    await this.treeNodeRepository.deleteAll();
+    await this.seedTree();
+    const stats = await this.getTreeStatistics();
+    return {
+      message: 'Árbol binario clínico UCI reconstruido exitosamente',
+      ...stats,
+    };
+  }
+
+  async getTreeStatistics(): Promise<{
+    totalNodes: number;
+    leafNodes: number;
+    internalBinaryNodes: number;
+    emergencyNodes: number;
+  }> {
+    const allNodes = await this.treeNodeRepository.find();
+    const leafNodes = allNodes.filter((n) => n.isLeaf).length;
+    const emergencyNodes = allNodes.filter((n) => n.isEmergency).length;
+
+    return {
+      totalNodes: allNodes.length,
+      leafNodes,
+      internalBinaryNodes: allNodes.length - leafNodes,
+      emergencyNodes,
+    };
+  }
+
+  /**
+   * Reconstruye la ruta de navegación desde la raíz hasta la hoja seleccionada
+   * para guardarla en el Excel del paciente.
+   */
+  private async buildBreadcrumbPath(leafNode: TreeNode): Promise<string[]> {
+    const labels: string[] = [];
+    let cursor: TreeNode | null = leafNode;
+
+    while (cursor && cursor.code !== 'ROOT') {
+      labels.unshift(cursor.label);
+      if (cursor.parentNode?.id) {
+        cursor = await this.treeNodeRepository.findOne({
+          where: { id: cursor.parentNode.id },
+          relations: { parentNode: true },
+        });
+      } else {
+        break;
+      }
+    }
+
+    return labels;
+  }
+
+  /**
+   * Pobla la base de datos de forma recursiva con toda la estructura clínica de AGENTS.md
+   * y los desgloses binarios de dolor, dispositivos, necesidades fisiológicas, emociones y mensajes.
    */
   private async seedTree(): Promise<void> {
-    // 1. Nodo ROOT Virtual
-    const root = this.treeNodeRepository.create({
-      code: 'ROOT',
-      label: 'Menú Principal UCI',
-      description: 'Nodo raíz del sistema',
-      level: 0,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.LOW,
-    });
-    await this.treeNodeRepository.save(root);
+    await this.createNodeRecursive(CLINICAL_BINARY_TREE_SEED, null, 0);
+  }
 
-    // 2. Nivel 0 (Sección A vs Sección B)
-    const nodeA = this.treeNodeRepository.create({
-      code: 'A',
-      label: 'Dolor y Necesidades Físicas',
-      description: 'Malestar corporal, tubos, sed o posición',
-      icon: 'body',
-      level: 1,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.LOW,
-      parentNode: root,
+  private async createNodeRecursive(
+    spec: ClinicalSeedNodeSpec,
+    parent: TreeNode | null,
+    level: number,
+  ): Promise<TreeNode> {
+    const isLeaf = !spec.left && !spec.right;
+
+    const node = this.treeNodeRepository.create({
+      code: spec.code,
+      category: spec.category,
+      label: spec.label,
+      description: spec.description,
+      icon: spec.icon,
+      level,
+      isLeaf,
+      isEmergency: Boolean(spec.isEmergency),
+      severityLevel: spec.severityLevel,
+      parentNode: parent ?? undefined,
     });
 
-    const nodeB = this.treeNodeRepository.create({
-      code: 'B',
-      label: 'Estado Emocional y Mensajes',
-      description: 'Ánimo, familia, dudas o descanso',
-      icon: 'heart',
-      level: 1,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.LOW,
-      parentNode: root,
-    });
-    await this.treeNodeRepository.save([nodeA, nodeB]);
+    const savedNode = await this.treeNodeRepository.save(node);
 
-    root.leftNode = nodeA;
-    root.rightNode = nodeB;
-    await this.treeNodeRepository.save(root);
+    if (spec.left) {
+      savedNode.leftNode = await this.createNodeRecursive(
+        spec.left,
+        savedNode,
+        level + 1,
+      );
+    }
 
-    // 3. Sub-ramas de A (A1 vs A2)
-    const nodeA1 = this.treeNodeRepository.create({
-      code: 'A1',
-      label: 'Dolor / Malestar de Dispositivos',
-      description: 'Dolor físico o molestia por tubo/sonda',
-      icon: 'pain',
-      level: 2,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.HIGH,
-      parentNode: nodeA,
-    });
+    if (spec.right) {
+      savedNode.rightNode = await this.createNodeRecursive(
+        spec.right,
+        savedNode,
+        level + 1,
+      );
+    }
 
-    const nodeA2 = this.treeNodeRepository.create({
-      code: 'A2',
-      label: 'Necesidades y Confort',
-      description: 'Sed, posición, temperatura o aire',
-      icon: 'comfort',
-      level: 2,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.MEDIUM,
-      parentNode: nodeA,
-    });
-    await this.treeNodeRepository.save([nodeA1, nodeA2]);
+    if (spec.left || spec.right) {
+      await this.treeNodeRepository.save(savedNode);
+    }
 
-    nodeA.leftNode = nodeA1;
-    nodeA.rightNode = nodeA2;
-    await this.treeNodeRepository.save(nodeA);
-
-    // 4. Sub-ramas de B (B1 vs B2)
-    const nodeB1 = this.treeNodeRepository.create({
-      code: 'B1',
-      label: 'Estado Emocional',
-      description: 'Miedo, ansiedad o tristeza',
-      icon: 'emotion',
-      level: 2,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.MEDIUM,
-      parentNode: nodeB,
-    });
-
-    const nodeB2 = this.treeNodeRepository.create({
-      code: 'B2',
-      label: 'Mensajes Rápidos',
-      description: 'Descanso o preguntas al equipo',
-      icon: 'chat',
-      level: 2,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.LOW,
-      parentNode: nodeB,
-    });
-    await this.treeNodeRepository.save([nodeB1, nodeB2]);
-
-    nodeB.leftNode = nodeB1;
-    nodeB.rightNode = nodeB2;
-    await this.treeNodeRepository.save(nodeB);
-
-    // 5. Desglose de A1 -> A1.1 (Dolor Localizado) vs A1.2 (Dispositivos)
-    const nodeA1_1 = this.treeNodeRepository.create({
-      code: 'A1.1',
-      label: 'Dolor Físico Localizado',
-      description: 'Dolor en una parte del cuerpo',
-      icon: 'localized-pain',
-      level: 3,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.HIGH,
-      parentNode: nodeA1,
-    });
-
-    const nodeA1_2 = this.treeNodeRepository.create({
-      code: 'A1.2',
-      label: 'Molestia por Tubo / Dispositivo',
-      description: 'Tubo endotraqueal, vía o sonda',
-      icon: 'tube',
-      level: 3,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.HIGH,
-      parentNode: nodeA1,
-    });
-    await this.treeNodeRepository.save([nodeA1_1, nodeA1_2]);
-
-    nodeA1.leftNode = nodeA1_1;
-    nodeA1.rightNode = nodeA1_2;
-    await this.treeNodeRepository.save(nodeA1);
-
-    // 6. Desglose de A1.1 -> A1.1.1 (Cabeza/Torso) vs A1.1.2 (Extremidades/Abdomen)
-    const nodeA1_1_1 = this.treeNodeRepository.create({
-      code: 'A1.1.1',
-      label: 'Cabeza o Torso',
-      description: 'Dolor en cabeza, cuello o pecho',
-      icon: 'chest',
-      level: 4,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.HIGH,
-      parentNode: nodeA1_1,
-    });
-
-    const nodeA1_1_2 = this.treeNodeRepository.create({
-      code: 'A1.1.2',
-      label: 'Extremidades o Abdomen',
-      description: 'Brazos, piernas o estómago',
-      icon: 'limbs',
-      level: 4,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.MEDIUM,
-      parentNode: nodeA1_1,
-    });
-    await this.treeNodeRepository.save([nodeA1_1_1, nodeA1_1_2]);
-
-    nodeA1_1.leftNode = nodeA1_1_1;
-    nodeA1_1.rightNode = nodeA1_1_2;
-    await this.treeNodeRepository.save(nodeA1_1);
-
-    // 7. Hojas de A1.1.1 (Punzante Agudo vs Sordo Constante)
-    const leafA1_1_1_1 = this.treeNodeRepository.create({
-      code: 'A1.1.1.1',
-      label: 'Dolor Punzante Agudo',
-      description: 'Dolor fuerte y repentino (Alerta médica)',
-      icon: 'alert-pain',
-      level: 5,
-      isLeaf: true,
-      isEmergency: true, // Dispara alerta crítica
-      severityLevel: SeverityLevel.CRITICAL,
-      parentNode: nodeA1_1_1,
-    });
-
-    const leafA1_1_1_2 = this.treeNodeRepository.create({
-      code: 'A1.1.1.2',
-      label: 'Dolor Sordo / Constante',
-      description: 'Molestia continua pero soportable',
-      icon: 'constant-pain',
-      level: 5,
-      isLeaf: true,
-      isEmergency: false,
-      severityLevel: SeverityLevel.HIGH,
-      parentNode: nodeA1_1_1,
-    });
-    await this.treeNodeRepository.save([leafA1_1_1_1, leafA1_1_1_2]);
-
-    nodeA1_1_1.leftNode = leafA1_1_1_1;
-    nodeA1_1_1.rightNode = leafA1_1_1_2;
-    await this.treeNodeRepository.save(nodeA1_1_1);
-
-    // 8. Hojas de A1.1.2 (Abdomen vs Extremidades)
-    const leafA1_1_2_1 = this.treeNodeRepository.create({
-      code: 'A1.1.2.1',
-      label: 'Dolor Abdominal',
-      description: 'Dolor o hinchazón en el estómago',
-      icon: 'stomach',
-      level: 5,
-      isLeaf: true,
-      isEmergency: false,
-      severityLevel: SeverityLevel.HIGH,
-      parentNode: nodeA1_1_2,
-    });
-
-    const leafA1_1_2_2 = this.treeNodeRepository.create({
-      code: 'A1.1.2.2',
-      label: 'Dolor en Brazos / Piernas',
-      description: 'Calambre o dolor en extremidades',
-      icon: 'legs',
-      level: 5,
-      isLeaf: true,
-      isEmergency: false,
-      severityLevel: SeverityLevel.MEDIUM,
-      parentNode: nodeA1_1_2,
-    });
-    await this.treeNodeRepository.save([leafA1_1_2_1, leafA1_1_2_2]);
-
-    nodeA1_1_2.leftNode = leafA1_1_2_1;
-    nodeA1_1_2.rightNode = leafA1_1_2_2;
-    await this.treeNodeRepository.save(nodeA1_1_2);
-
-    // 9. Hojas de A1.2 (Tubo Endotraqueal vs Sonda/Vía)
-    const leafA1_2_1 = this.treeNodeRepository.create({
-      code: 'A1.2.1',
-      label: 'Tubo Endotraqueal / Garganta',
-      description: 'Molestia o roce del tubo en la garganta',
-      icon: 'intubation',
-      level: 4,
-      isLeaf: true,
-      isEmergency: false,
-      severityLevel: SeverityLevel.HIGH,
-      parentNode: nodeA1_2,
-    });
-
-    const leafA1_2_2 = this.treeNodeRepository.create({
-      code: 'A1.2.2',
-      label: 'Sonda / Vía Venosa',
-      description: 'Ardor o tirón de vía intravenosa o sonda',
-      icon: 'catheter',
-      level: 4,
-      isLeaf: true,
-      isEmergency: false,
-      severityLevel: SeverityLevel.MEDIUM,
-      parentNode: nodeA1_2,
-    });
-    await this.treeNodeRepository.save([leafA1_2_1, leafA1_2_2]);
-
-    nodeA1_2.leftNode = leafA1_2_1;
-    nodeA1_2.rightNode = leafA1_2_2;
-    await this.treeNodeRepository.save(nodeA1_2);
-
-    // 10. Desglose de A2 -> A2.1 (Sed/Posición) vs A2.2 (Frío-Calor / Asfixia)
-    const nodeA2_1 = this.treeNodeRepository.create({
-      code: 'A2.1',
-      label: 'Sed / Boca Seca vs Cama',
-      description: 'Sed o cambio de postura',
-      icon: 'bed-water',
-      level: 3,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.MEDIUM,
-      parentNode: nodeA2,
-    });
-
-    const nodeA2_2 = this.treeNodeRepository.create({
-      code: 'A2.2',
-      label: 'Temperatura vs Falta de Aire',
-      description: 'Frío, calor o dificultad respiratoria',
-      icon: 'breath-temp',
-      level: 3,
-      isLeaf: false,
-      isEmergency: false,
-      severityLevel: SeverityLevel.CRITICAL,
-      parentNode: nodeA2,
-    });
-    await this.treeNodeRepository.save([nodeA2_1, nodeA2_2]);
-
-    nodeA2.leftNode = nodeA2_1;
-    nodeA2.rightNode = nodeA2_2;
-    await this.treeNodeRepository.save(nodeA2);
-
-    // 11. Hojas de A2.1 (Sed vs Posición)
-    const leafA2_1_1 = this.treeNodeRepository.create({
-      code: 'A2.1.1',
-      label: 'Sed / Boca Seca',
-      description: 'Necesidad de humedecer la boca',
-      icon: 'water',
-      level: 4,
-      isLeaf: true,
-      isEmergency: false,
-      severityLevel: SeverityLevel.MEDIUM,
-      parentNode: nodeA2_1,
-    });
-
-    const leafA2_1_2 = this.treeNodeRepository.create({
-      code: 'A2.1.2',
-      label: 'Ajuste de Cama / Posición',
-      description: 'Cambiar de postura o elevar cabecera',
-      icon: 'bed',
-      level: 4,
-      isLeaf: true,
-      isEmergency: false,
-      severityLevel: SeverityLevel.LOW,
-      parentNode: nodeA2_1,
-    });
-    await this.treeNodeRepository.save([leafA2_1_1, leafA2_1_2]);
-
-    nodeA2_1.leftNode = leafA2_1_1;
-    nodeA2_1.rightNode = leafA2_1_2;
-    await this.treeNodeRepository.save(nodeA2_1);
-
-    // 12. Hojas de A2.2 (Frío/Calor vs FALTA DE AIRE - CRÍTICO)
-    const leafA2_2_1 = this.treeNodeRepository.create({
-      code: 'A2.2.1',
-      label: 'Frío / Calor',
-      description: 'Ajuste de cobija o temperatura ambiente',
-      icon: 'thermometer',
-      level: 4,
-      isLeaf: true,
-      isEmergency: false,
-      severityLevel: SeverityLevel.LOW,
-      parentNode: nodeA2_2,
-    });
-
-    const leafA2_2_2 = this.treeNodeRepository.create({
-      code: 'A2.2.2',
-      label: 'Falta de Aire / Asfixia',
-      description: 'Dificultad respiratoria severa (Emergencia vital)',
-      icon: 'lungs-alert',
-      level: 4,
-      isLeaf: true,
-      isEmergency: true, // ¡EMERGENCIA CRÍTICA MÁXIMA!
-      severityLevel: SeverityLevel.CRITICAL,
-      parentNode: nodeA2_2,
-    });
-    await this.treeNodeRepository.save([leafA2_2_1, leafA2_2_2]);
-
-    nodeA2_2.leftNode = leafA2_2_1;
-    nodeA2_2.rightNode = leafA2_2_2;
-    await this.treeNodeRepository.save(nodeA2_2);
-
-    // 13. Hojas de B1 (Emociones: Ansiedad/Miedo vs Tristeza/Frustración)
-    const leafB1_1 = this.treeNodeRepository.create({
-      code: 'B1.1',
-      label: 'Ansiedad / Miedo / Pánico',
-      description: 'Angustia o temor intenso',
-      icon: 'anxiety',
-      level: 3,
-      isLeaf: true,
-      isEmergency: false,
-      severityLevel: SeverityLevel.HIGH,
-      parentNode: nodeB1,
-    });
-
-    const leafB1_2 = this.treeNodeRepository.create({
-      code: 'B1.2',
-      label: 'Tristeza / Deseo de ver a Familia',
-      description: 'Necesidad de compañía o apoyo familiar',
-      icon: 'family',
-      level: 3,
-      isLeaf: true,
-      isEmergency: false,
-      severityLevel: SeverityLevel.MEDIUM,
-      parentNode: nodeB1,
-    });
-    await this.treeNodeRepository.save([leafB1_1, leafB1_2]);
-
-    nodeB1.leftNode = leafB1_1;
-    nodeB1.rightNode = leafB1_2;
-    await this.treeNodeRepository.save(nodeB1);
-
-    // 14. Hojas de B2 (Mensajes Rápidos: Silencio/Descanso vs Dudas)
-    const leafB2_1 = this.treeNodeRepository.create({
-      code: 'B2.1',
-      label: 'Quiero Descansar / Silencio',
-      description: 'Solicitud de apagar luces o silencio para dormir',
-      icon: 'sleep',
-      level: 3,
-      isLeaf: true,
-      isEmergency: false,
-      severityLevel: SeverityLevel.LOW,
-      parentNode: nodeB2,
-    });
-
-    const leafB2_2 = this.treeNodeRepository.create({
-      code: 'B2.2',
-      label: '¿Falta mucho para el procedimiento?',
-      description: 'Duda sobre el tiempo de permanencia o cuidados',
-      icon: 'clock',
-      level: 3,
-      isLeaf: true,
-      isEmergency: false,
-      severityLevel: SeverityLevel.LOW,
-      parentNode: nodeB2,
-    });
-    await this.treeNodeRepository.save([leafB2_1, leafB2_2]);
-
-    nodeB2.leftNode = leafB2_1;
-    nodeB2.rightNode = leafB2_2;
-    await this.treeNodeRepository.save(nodeB2);
+    return savedNode;
   }
 }
