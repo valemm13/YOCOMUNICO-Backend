@@ -35,7 +35,8 @@ export class ClinicalRecordsController {
 
   /**
    * GET /api/clinical-records/patient/:patientId/export-csv
-   * Descarga el archivo CSV compatible directamente con Microsoft Excel del paciente seleccionado.
+   * Descarga el archivo CSV optimizado para Microsoft Excel (separado por ';' y con UTF-8 BOM)
+   * con las columnas debidamente distribuidas y los mensajes del paciente destacados.
    */
   @Get('patient/:patientId/export-csv')
   async exportPatientExcelCsv(
@@ -48,6 +49,28 @@ export class ClinicalRecordsController {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(csvContent);
+  }
+
+  /**
+   * GET /api/clinical-records/patient/:patientId/export-excel
+   * Descarga el archivo nativo de Microsoft Excel (.XLS / SpreadsheetML)
+   * con formato completo: cuadrícula con bordes, encabezados cromáticos, ficha clínica
+   * y los mensajes del paciente resaltados en color azul celeste con texto grande y en negrita.
+   */
+  @Get('patient/:patientId/export-excel')
+  async exportPatientExcelXls(
+    @Param('patientId', new ParseUUIDPipe({ version: '4' })) patientId: string,
+    @Res() res: Response,
+  ) {
+    const { filename, xlsContent } =
+      await this.clinicalRecordsService.exportPatientExcelXls(patientId);
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.ms-excel; charset=utf-8',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(xlsContent);
   }
 
   /**

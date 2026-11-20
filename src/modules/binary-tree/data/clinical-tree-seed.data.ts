@@ -191,10 +191,10 @@ export const CLINICAL_BINARY_TREE_SEED: ClinicalSeedNodeSpec = {
           severityLevel: SeverityLevel.HIGH,
           left: {
             code: 'A1.2.1.1',
-            category: 'Aspiración de Secreciones',
-            label: 'Necesito Aspiración de Flemas en el Tubo',
+            category: 'Limpieza de Secreciones del Tubo',
+            label: 'Limpiar Flemas Atoradas en el Tubo',
             description:
-              'Acumulación de secreciones bronquiales/saliva que obstruye el paso de aire',
+              'Acumulación de secreciones u obstrucción de aire dentro del tubo endotraqueal',
             icon: 'suction',
             severityLevel: SeverityLevel.HIGH,
           },
@@ -564,65 +564,29 @@ export const CLINICAL_BINARY_TREE_SEED: ClinicalSeedNodeSpec = {
         severityLevel: SeverityLevel.LOW,
         left: {
           code: 'B1.2.1',
-          category: 'Emociones Positivas y Bienestar',
-          label: 'Calma y Alivio vs Felicidad, Gratitud y Esperanza',
+          category: 'Bienestar y Recuperación',
+          label: 'Aliviado del Dolor vs Con Esperanza y Fuerza',
           description:
-            'Subdivisión binaria de estados emocionales positivos del paciente',
+            'Reporte de mejoría sintomática o ánimo y resiliencia para recuperarse',
           icon: 'smile',
           severityLevel: SeverityLevel.LOW,
           left: {
             code: 'B1.2.1.1',
-            category: 'Tranquilidad y Alivio',
-            label: 'En Paz / Tranquilo vs Aliviado del Dolor',
+            category: 'Alivio Sintomático',
+            label: 'Me Siento Mucho Mejor y Más Aliviado Ahora',
             description:
-              'Reporte positivo de calma mental o mejoría sintomática tras tratamiento',
-            icon: 'calm',
+              'Confirma que la analgesia o intervención médica hizo efecto positivo',
+            icon: 'relief',
             severityLevel: SeverityLevel.LOW,
-            left: {
-              code: 'B1.2.1.1.1',
-              category: 'Paz y Seguridad',
-              label: 'Me Siento Tranquilo, Seguro y en Paz',
-              description:
-                'El paciente reporta bienestar emocional y sensación de seguridad',
-              icon: 'peace',
-              severityLevel: SeverityLevel.LOW,
-            },
-            right: {
-              code: 'B1.2.1.1.2',
-              category: 'Alivio Sintomático',
-              label: 'Me Siento Mucho Mejor y Más Aliviado Ahora',
-              description:
-                'Confirma que la analgesia o intervención médica hizo efecto positivo',
-              icon: 'relief',
-              severityLevel: SeverityLevel.LOW,
-            },
           },
           right: {
             code: 'B1.2.1.2',
-            category: 'Alegría, Gratitud y Motivación',
-            label: 'Feliz / Agradecido vs Con Esperanza y Fuerza',
+            category: 'Esperanza y Motivación',
+            label: 'Me Siento con Esperanza, Fe y Fuerza para Recuperarme',
             description:
-              'Expresión de afecto positivo, agradecimiento al personal o ánimo de recuperación',
-            icon: 'happy',
+              'Estado de afrontamiento positivo y resiliencia en la UCI',
+            icon: 'hope',
             severityLevel: SeverityLevel.LOW,
-            left: {
-              code: 'B1.2.1.2.1',
-              category: 'Gratitud y Alegría',
-              label: 'Estoy Feliz y Muy Agradecido con el Equipo Médico',
-              description:
-                'Expresión de gratitud hacia médicos, enfermeros y familia',
-              icon: 'gratitude',
-              severityLevel: SeverityLevel.LOW,
-            },
-            right: {
-              code: 'B1.2.1.2.2',
-              category: 'Esperanza y Motivación',
-              label: 'Me Siento con Esperanza, Fe y Fuerza para Recuperarme',
-              description:
-                'Estado de afrontamiento positivo y resiliencia en la UCI',
-              icon: 'hope',
-              severityLevel: SeverityLevel.LOW,
-            },
           },
         },
         right: {

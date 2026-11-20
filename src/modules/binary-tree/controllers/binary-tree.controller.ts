@@ -12,9 +12,10 @@ import { BinaryTreeService } from '../service/binary-tree.service';
 import { BinaryPairResponseDto } from '../dtos/binary-response.dto';
 import {
   NavigateTreeDto,
+  NavigateResponseDto,
   ResetTreeNavigationDto,
   StepBackTreeDto,
-} from '../dtos/navigate-tree.dto';
+} from '../dtos/navigate-tree.dto'
 
 @Controller('binary-tree')
 export class BinaryTreeController {
@@ -58,7 +59,7 @@ export class BinaryTreeController {
    */
   @Post('navigate')
   @HttpCode(HttpStatus.OK)
-  async navigate(@Body() navigateDto: NavigateTreeDto) {
+  async navigate(@Body() navigateDto: NavigateTreeDto): Promise<NavigateResponseDto> {
     return this.binaryTreeService.navigate(navigateDto);
   }
 

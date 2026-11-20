@@ -47,6 +47,7 @@ describe('BinaryTreeService & Reglas de AGENTS.md', () => {
     getCachedBinaryPair: jest.fn().mockReturnValue(undefined),
     clearTreeCache: jest.fn(),
     updatePatientDeviceSession: jest.fn(),
+    notifyLeafReached: jest.fn(),
   };
 
   beforeEach(async () => {

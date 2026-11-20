@@ -66,6 +66,14 @@ export class EmergencyService {
       triggeredAt: saved.triggeredAt,
     });
 
+    this.emergencyGateway.emitLeafReachedToPatientDevice(patient.id, {
+      patientId: patient.id,
+      isLeaf: true,
+      isEmergency: true,
+      title: '¡Emergencia! Mensaje enviado al médico',
+      label: 'Falta de aire / Asfixia',
+    });
+
     return saved;
   }
 

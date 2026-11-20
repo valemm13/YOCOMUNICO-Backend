@@ -17,6 +17,7 @@ import {
   NavigationSelection,
   ResetTreeNavigationDto,
   StepBackTreeDto,
+  NavigateResponseDto
 } from '../dtos/navigate-tree.dto';
 import {
   CLINICAL_BINARY_TREE_SEED,
@@ -42,15 +43,20 @@ export class BinaryTreeService implements OnModuleInit {
 
   /**
    * Se ejecuta automáticamente al arrancar el servidor.
-   * Si la tabla está vacía o tiene la versión antigua incompleta, pobla el árbol binario clínico completo.
+   * Si la tabla está vacía o el árbol quedó incompleto (por ejemplo, raíz sin hijos), pobla el árbol binario clínico completo.
    */
   async onModuleInit(): Promise<void> {
     const count = await this.treeNodeRepository.count();
-    if (count === 0) {
+    const root = await this.treeNodeRepository.findOne({
+      where: { code: 'ROOT' },
+      relations: { leftNode: true, rightNode: true },
+    });
+
+    if (count === 0 || !root || !root.leftNode || !root.rightNode) {
       this.logger.log(
         '🌱 Inicializando árbol binario clínico exhaustivo UCI...',
       );
-      await this.seedTree();
+      await this.reseedClinicalTree();
       this.logger.log('✅ Árbol binario clínico inicializado correctamente.');
     }
   }
@@ -146,15 +152,11 @@ export class BinaryTreeService implements OnModuleInit {
    * (tanto desde el Control Físico de 2 Botones + Mini Proyector como desde Modo Solo Celular).
    * Cumple las Reglas 1, 2, 3 y 5 de AGENTS.md.
    */
-  async navigate(dto: NavigateTreeDto): Promise<{
-    selectedNode: NodeOptionDto;
-    isLeaf: boolean;
-    isEmergency: boolean;
-    severityLevel: SeverityLevel;
-    clinicalRecordId?: string;
-    emergencyAlertId?: string;
-    nextPair: BinaryPairResponseDto | null;
-  }> {
+  /**
+   * Procesa la pulsación del paciente y devuelve **toda** la información
+   * que necesita la UI para decidir si muestra el pop‑up.
+   */
+  async navigate(dto: NavigateTreeDto): Promise<NavigateResponseDto> {
     const currentNode = await this.treeNodeRepository.findOne({
       where: { id: dto.currentNodeId },
       relations: {
@@ -169,7 +171,7 @@ export class BinaryTreeService implements OnModuleInit {
       );
     }
 
-    // Determinar qué mitad binaria eligió el paciente (descartando la otra mitad)
+    // 1. Elegimos la mitad que el paciente tocó (descartando la otra mitad)
     const selectedChild =
       dto.selection === NavigationSelection.LEFT
         ? currentNode.leftNode
@@ -181,7 +183,7 @@ export class BinaryTreeService implements OnModuleInit {
       );
     }
 
-    // Cargar el nodo seleccionado con sus propios hijos y padre
+    // 2. Cargamos el nodo completo (hijos + padre)
     const fullSelected = await this.treeNodeRepository.findOne({
       where: { id: selectedChild.id },
       relations: {
@@ -195,7 +197,7 @@ export class BinaryTreeService implements OnModuleInit {
       throw new NotFoundException('Error al cargar el nodo seleccionado');
     }
 
-    // REGLA 3 DE AGENTS.MD: Persistencia auditada de cada pulsación de botón
+    // 3. REGLA 3 DE AGENTS.MD: Persistencia auditada de cada pulsación de botón
     await this.clinicalRecordsService.recordButtonPressAudit({
       patientId: dto.patientId,
       fromNode: currentNode,
@@ -204,7 +206,7 @@ export class BinaryTreeService implements OnModuleInit {
       source: dto.source,
     });
 
-    // REGLA 2 DE AGENTS.MD: Si el nodo es crítico (isEmergency = true), dispara alerta de prioridad máxima
+    // 4. REGLA 2 DE AGENTS.MD: Si el nodo es crítico (isEmergency = true), dispara alerta de prioridad máxima
     let emergencyAlertId: string | undefined;
     if (fullSelected.isEmergency) {
       const alert = await this.emergencyService.triggerFromCriticalNode(
@@ -215,9 +217,9 @@ export class BinaryTreeService implements OnModuleInit {
       emergencyAlertId = alert.id;
     }
 
-    // Si es un nodo hoja (síntoma o emoción específica alcanzada):
-    // 1. Se envía automáticamente al Excel del paciente en la app del médico (Regla 5)
-    // 2. Se reinicia la posición del paciente al nodo raíz para su próxima comunicación
+    // 5. Si es un nodo hoja (síntoma o emoción específica alcanzada):
+    //    - Se envía automáticamente al Excel del paciente en la app del médico (Regla 5)
+    //    - Se reinicia la posición del paciente al nodo raíz para su próxima comunicación
     let nextPair: BinaryPairResponseDto | null = null;
     let clinicalRecordId: string | undefined;
 
@@ -232,6 +234,7 @@ export class BinaryTreeService implements OnModuleInit {
         });
       clinicalRecordId = record.id;
 
+      // Reinicio a la raíz (para la siguiente interacción)
       const rootPair = await this.getRootPair();
       await this.patientsService.updateCurrentNode(
         dto.patientId,
@@ -240,13 +243,28 @@ export class BinaryTreeService implements OnModuleInit {
       this.syncService.updatePatientDeviceSession({
         patientId: dto.patientId,
         currentNodeId: rootPair.currentNodeId,
-        currentNodeCode: 'ROOT',
+        currentNodeCode: rootPair.currentNodeCode ?? 'ROOT',
         level: 0,
-        inputMode: dto.source,
+        inputMode: dto.source ?? InputSource.TOUCH_SCREEN,
         resetBreadcrumb: true,
         lastPair: rootPair,
       });
+
+      // Notificar al microproyector que se alcanzó un nodo hoja para que muestre el pop-up de 3 segundos
+      this.syncService.notifyLeafReached({
+        patientId: dto.patientId,
+        isLeaf: true,
+        isEmergency: fullSelected.isEmergency,
+        title: fullSelected.isEmergency
+          ? '¡Emergencia! Mensaje enviado al médico'
+          : 'Mensaje enviado al médico',
+        label: fullSelected.label,
+        selectedNode: this.toOptionDto(fullSelected)!,
+      });
+
+      nextPair = null;
     } else {
+      // 6. Nodo intermedio → devolvemos el nuevo par y actualizamos la posición del paciente
       nextPair = {
         currentNodeId: fullSelected.id,
         currentNodeCode: fullSelected.code,
@@ -271,6 +289,7 @@ export class BinaryTreeService implements OnModuleInit {
       });
     }
 
+    // 7. Respuesta completa que la UI necesita
     return {
       selectedNode: this.toOptionDto(fullSelected)!,
       isLeaf: fullSelected.isLeaf,
@@ -281,7 +300,7 @@ export class BinaryTreeService implements OnModuleInit {
       nextPair,
     };
   }
-
+  
   /**
    * Reinicia la navegación de un paciente al Nivel 0 (Sección A vs Sección B).
    */
@@ -351,8 +370,28 @@ export class BinaryTreeService implements OnModuleInit {
     emergencyNodes: number;
   }> {
     this.syncService.clearTreeCache();
-    await this.treeNodeRepository.deleteAll();
+
+    // 1. Desvincular referencias internas antes de borrar para no violar foreign keys
+    await this.treeNodeRepository
+      .createQueryBuilder()
+      .update(TreeNode)
+      .set({
+        leftNode: null as any,
+        rightNode: null as any,
+        parentNode: null as any,
+      })
+      .execute();
+
+    // 2. Borrar todos los nodos existentes
+    await this.treeNodeRepository
+      .createQueryBuilder()
+      .delete()
+      .from(TreeNode)
+      .execute();
+
+    // 3. Sembrar árbol binario clínico exhaustivo
     await this.seedTree();
+    await this.getRootPair();
     const stats = await this.getTreeStatistics();
     return {
       message: 'Árbol binario clínico UCI reconstruido exitosamente',
@@ -404,6 +443,7 @@ export class BinaryTreeService implements OnModuleInit {
   /**
    * Pobla la base de datos de forma recursiva con toda la estructura clínica de AGENTS.md
    * y los desgloses binarios de dolor, dispositivos, necesidades fisiológicas, emociones y mensajes.
+   * Se utiliza actualización directa por ID para evitar ciclos en memoria en el grafo de TypeORM.
    */
   private async seedTree(): Promise<void> {
     await this.createNodeRecursive(CLINICAL_BINARY_TREE_SEED, null, 0);
@@ -411,7 +451,7 @@ export class BinaryTreeService implements OnModuleInit {
 
   private async createNodeRecursive(
     spec: ClinicalSeedNodeSpec,
-    parent: TreeNode | null,
+    parentId: string | null,
     level: number,
   ): Promise<TreeNode> {
     const isLeaf = !spec.left && !spec.right;
@@ -426,29 +466,37 @@ export class BinaryTreeService implements OnModuleInit {
       isLeaf,
       isEmergency: Boolean(spec.isEmergency),
       severityLevel: spec.severityLevel,
-      parentNode: parent ?? undefined,
+      parentNode: parentId ? ({ id: parentId } as TreeNode) : undefined,
     });
 
     const savedNode = await this.treeNodeRepository.save(node);
 
+    let leftChildId: string | null = null;
+    let rightChildId: string | null = null;
+
     if (spec.left) {
-      savedNode.leftNode = await this.createNodeRecursive(
+      const leftChild = await this.createNodeRecursive(
         spec.left,
-        savedNode,
+        savedNode.id,
         level + 1,
       );
+      leftChildId = leftChild.id;
     }
 
     if (spec.right) {
-      savedNode.rightNode = await this.createNodeRecursive(
+      const rightChild = await this.createNodeRecursive(
         spec.right,
-        savedNode,
+        savedNode.id,
         level + 1,
       );
+      rightChildId = rightChild.id;
     }
 
-    if (spec.left || spec.right) {
-      await this.treeNodeRepository.save(savedNode);
+    if (leftChildId || rightChildId) {
+      await this.treeNodeRepository.update(savedNode.id, {
+        leftNode: leftChildId ? ({ id: leftChildId } as TreeNode) : undefined,
+        rightNode: rightChildId ? ({ id: rightChildId } as TreeNode) : undefined,
+      });
     }
 
     return savedNode;

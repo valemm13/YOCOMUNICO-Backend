@@ -1,4 +1,7 @@
 import { IsUUID, IsEnum, IsNotEmpty, IsOptional } from 'class-validator';
+import { SeverityLevel } from '../entities/tree-node.entity';
+import { NodeOptionDto } from './binary-response.dto';
+import { BinaryPairResponseDto } from './binary-response.dto';
 
 export enum NavigationSelection {
   LEFT = 'LEFT',
@@ -52,4 +55,22 @@ export class StepBackTreeDto {
   @IsOptional()
   @IsEnum(InputSource)
   source?: InputSource;
+}
+
+
+export class NavigateResponseDto {
+  /** Nodo que el paciente acaba de seleccionar (con sus hijos) */
+  selectedNode: NodeOptionDto;
+  /** ¿Este nodo es una hoja? */
+  isLeaf: boolean;
+  /** ¿Es una hoja de emergencia? */
+  isEmergency: boolean;
+  /** Severidad clínica del nodo (solo informativa) */
+  severityLevel: SeverityLevel;
+  /** ID del registro en Excel (solo si es hoja) */
+  clinicalRecordId?: string;
+  /** ID de la alerta de emergencia (solo si es hoja de emergencia) */
+  emergencyAlertId?: string;
+  /** El siguiente par de nodos que debe mostrarse en UI (null si hoja) */
+  nextPair: BinaryPairResponseDto | null;
 }

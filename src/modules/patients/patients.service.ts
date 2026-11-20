@@ -13,6 +13,7 @@ import {
   PatientDeviceMode,
   PatientIcuStatus,
 } from './entities/patient.entity';
+import { SeverityLevel } from '../binary-tree/entities/tree-node.entity';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import {
   UpdatePatientDto,
@@ -60,6 +61,7 @@ export class PatientsService implements OnModuleInit {
       deviceMode: dto.deviceMode ?? PatientDeviceMode.HYBRID,
       deviceHardwareId: dto.deviceHardwareId,
       status: dto.status ?? PatientIcuStatus.ACTIVE_ICU,
+      severityLevel: dto.severityLevel ?? SeverityLevel.HIGH,
       clinicalSummaryNotes: dto.clinicalSummaryNotes,
     });
 
@@ -127,6 +129,7 @@ export class PatientsService implements OnModuleInit {
         deviceMode: PatientDeviceMode.HARDWARE_CONTROLLER,
         deviceHardwareId: 'CTRL-POLYMER-001',
         status: PatientIcuStatus.ACTIVE_ICU,
+        severityLevel: SeverityLevel.HIGH,
         clinicalSummaryNotes:
           'Paciente consciente, usa control de polímero de 2 botones + mini proyector en techo/bandeja.',
       },
@@ -141,6 +144,7 @@ export class PatientsService implements OnModuleInit {
         deviceMode: PatientDeviceMode.TOUCH_SCREEN,
         deviceHardwareId: 'MOBILE-APP-CAMA-02',
         status: PatientIcuStatus.ACTIVE_ICU,
+        severityLevel: SeverityLevel.CRITICAL,
         clinicalSummaryNotes:
           'Paciente consciente en modo SOLO CELULAR (pantalla dividida en 2 grandes secciones táctiles).',
       },
@@ -155,6 +159,7 @@ export class PatientsService implements OnModuleInit {
         deviceMode: PatientDeviceMode.HYBRID,
         deviceHardwareId: 'HYBRID-UCI-003',
         status: PatientIcuStatus.ACTIVE_ICU,
+        severityLevel: SeverityLevel.MEDIUM,
         clinicalSummaryNotes:
           'Modo híbrido activo: puede pulsar los 2 botones del control o tocar las 2 mitades del celular.',
       },

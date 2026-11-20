@@ -139,4 +139,25 @@ export class EmergencyGateway
       .to(`patient-device:${patientId}`)
       .emit('device:binary-pair-updated', pair);
   }
+
+  /**
+   * Notifica a la sala del paciente (microproyector) que se ha alcanzado un nodo hoja o mensaje
+   * para desplegar el pop-up temporal de 3 segundos y retornar a la pantalla de espera.
+   */
+  emitLeafReachedToPatientDevice(
+    patientId: string,
+    payload: {
+      patientId: string;
+      isLeaf: boolean;
+      isEmergency: boolean;
+      title: string;
+      label?: string;
+      selectedNode?: unknown;
+    },
+  ): void {
+    if (!this.server) return;
+    this.server
+      .to(`patient-device:${patientId}`)
+      .emit('device:leaf-reached', payload);
+  }
 }

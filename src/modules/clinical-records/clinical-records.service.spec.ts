@@ -146,8 +146,8 @@ describe('ClinicalRecordsService (Vista Excel, Relevos y Exportación CSV)', () 
     expect(csvResult.filename).toContain('UCI-Cama-02');
     expect(csvResult.csvContent.startsWith('\uFEFF')).toBe(true);
     expect(csvResult.csvContent).toContain(
-      'Estoy Feliz y Muy Agradecido con el Equipo Médico',
+      'ESTOY FELIZ Y MUY AGRADECIDO CON EL EQUIPO MÉDICO',
     );
-    expect(csvResult.csvContent).toContain('Solo Celular / Pantalla Táctil');
+    expect(csvResult.csvContent).toContain('Teléfono Móvil / Táctil');
   });
 });

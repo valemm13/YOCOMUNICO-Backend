@@ -219,6 +219,7 @@ export class ClinicalRecordsService {
         diagnosis: patient.diagnosis,
         intubationType: patient.intubationType,
         deviceMode: patient.deviceMode,
+        severityLevel: patient.severityLevel,
         status: patient.status,
       },
       summary: {
@@ -254,7 +255,11 @@ export class ClinicalRecordsService {
   }
 
   /**
-   * Exporta el Excel del paciente en formato CSV con UTF-8 BOM para abrir directamente en Microsoft Excel.
+   * Exporta el Excel del paciente en formato CSV optimizado para Microsoft Excel en español:
+   * - Incluye directiva 'sep=;' para forzar a Excel a separar en columnas reales (evita que todo quede en Columna A).
+   * - Codificación con UTF-8 BOM (\uFEFF) para visualización correcta de tildes y caracteres especiales.
+   * - Ficha de cabecera con los datos clínicos del paciente.
+   * - Columna de comunicación del paciente claramente diferenciada de descripciones técnicas.
    */
   async exportPatientExcelCsv(patientId: string): Promise<{
     filename: string;
@@ -269,29 +274,98 @@ export class ClinicalRecordsService {
       return `"${str}"`;
     };
 
-    const headers = sheet.columns.map(escapeCsv).join(',');
-    const lines = sheet.rows.map((row) =>
+    const patient = sheet.patient;
+    const now = this.formatDateTimeComponents(new Date());
+
+    // Tarjeta superior con datos clínicos del paciente
+    const metadataLines = [
+      'sep=;',
+      escapeCsv('========================================================================================================================'),
+      escapeCsv('CENTRO DE CUIDADOS INTENSIVOS (UCI) - EXPEDIENTE DIGITAL DE COMUNICACIÓN ASISTIDA'),
+      escapeCsv('SISTEMA DE COMUNICACIÓN Y MONITOREO POR NODOS BINARIOS'),
+      escapeCsv('========================================================================================================================'),
       [
-        row.rowNumber,
-        new Date(row.timestamp).toISOString(),
-        row.shift,
-        row.nodeCode,
-        row.category,
-        row.symptomOrMessage,
-        row.clinicalDescription || '',
-        row.navigationBreadcrumb || '',
-        row.severityLevel,
-        row.isEmergency ? 'SI' : 'NO',
-        row.source === InputSource.HARDWARE_CONTROLLER
-          ? 'Control 2 Botones + Proyector'
-          : 'Solo Celular / Pantalla Táctil',
-        row.status,
-        row.attendedByDoctorName || 'Pendiente',
-        row.doctorObservations || '',
-      ]
-        .map(escapeCsv)
-        .join(','),
-    );
+        escapeCsv('PACIENTE:'),
+        escapeCsv(patient.fullName.toUpperCase()),
+        escapeCsv('HISTORIA CLÍNICA / CÉDULA:'),
+        escapeCsv(patient.documentNumber),
+      ].join(';'),
+      [
+        escapeCsv('CAMA ASIGNADA:'),
+        escapeCsv(patient.bedNumber),
+        escapeCsv('EDAD:'),
+        escapeCsv(`${patient.age} años`),
+      ].join(';'),
+      [
+        escapeCsv('DIAGNÓSTICO MÉDICO:'),
+        escapeCsv(patient.diagnosis),
+        escapeCsv('ESTADO DE GRAVEDAD:'),
+        escapeCsv(this.translateSeverity(patient.severityLevel)),
+      ].join(';'),
+      [
+        escapeCsv('TIPO DE INTUBACIÓN:'),
+        escapeCsv(patient.intubationType || 'Orotraqueal'),
+        escapeCsv('DISPOSITIVO ASIGNADO:'),
+        escapeCsv(patient.deviceMode || 'Control 2 Botones + Proyector'),
+      ].join(';'),
+      [
+        escapeCsv('ESTADO EN UCI:'),
+        escapeCsv(patient.status || 'ACTIVE_ICU'),
+        escapeCsv('FECHA DEL REPORTE:'),
+        escapeCsv(`${now.date} ${now.time}`),
+      ].join(';'),
+      [
+        escapeCsv('TOTAL DE EVENTOS REGISTRADOS:'),
+        escapeCsv(sheet.summary.totalRows),
+        escapeCsv('ALERTAS CRÍTICAS DE EMERGENCIA:'),
+        escapeCsv(sheet.summary.criticalEventsCount),
+      ].join(';'),
+      escapeCsv('========================================================================================================================'),
+      '',
+      escapeCsv('------------------------------------------------------------------------------------------------------------------------'),
+      escapeCsv('REGISTRO CRONOLÓGICO: INTERACCIONES DEL PACIENTE Y OBSERVACIONES CLÍNICAS'),
+      escapeCsv('------------------------------------------------------------------------------------------------------------------------'),
+    ];
+
+    const columnHeaders = [
+      'N°',
+      'FECHA',
+      'HORA',
+      'TURNO MÉDICO',
+      'MENSAJE EXPRESADO POR EL PACIENTE',
+      'CATEGORÍA CLÍNICA',
+      'DESCRIPCIÓN MÉDICA',
+      'RUTA BINARIA SEGUIDA',
+      'SEVERIDAD',
+      '¿EMERGENCIA CRÍTICA?',
+      'DISPOSITIVO USADO',
+      'ESTADO ATENCIÓN',
+      'MÉDICO / ENFERMERO',
+      'OBSERVACIONES CLÍNICAS (NUBE)',
+    ]
+      .map(escapeCsv)
+      .join(';');
+
+    const dataLines = sheet.rows.map((row) => {
+      const dt = this.formatDateTimeComponents(row.timestamp);
+      const patientVoice = `[COMUNICADO PACIENTE]: ${row.symptomOrMessage.toUpperCase()}`;
+      return [
+        escapeCsv(row.rowNumber),
+        escapeCsv(dt.date),
+        escapeCsv(dt.time),
+        escapeCsv(this.translateShift(row.shift)),
+        escapeCsv(patientVoice),
+        escapeCsv(row.category),
+        escapeCsv(row.clinicalDescription || ''),
+        escapeCsv(row.navigationBreadcrumb || 'Inicio'),
+        escapeCsv(this.translateSeverity(row.severityLevel)),
+        escapeCsv(row.isEmergency ? '🚨 SÍ - ALERTA CRÍTICA' : 'NO (Normal)'),
+        escapeCsv(this.translateDevice(row.source)),
+        escapeCsv(row.status === 'ATTENDED' ? '✅ ATENDIDO' : '⏳ PENDIENTE'),
+        escapeCsv(row.attendedByDoctorName || 'Pendiente'),
+        escapeCsv(row.doctorObservations || ''),
+      ].join(';');
+    });
 
     const bom = '\uFEFF';
     const sanitizedName = sheet.patient.fullName
@@ -300,8 +374,223 @@ export class ClinicalRecordsService {
 
     return {
       filename: `expediente_uci_${sheet.patient.bedNumber}_${sanitizedName}.csv`,
-      csvContent: `${bom}${[headers, ...lines].join('\r\n')}`,
+      csvContent: `${bom}${[...metadataLines, columnHeaders, ...dataLines].join('\r\n')}`,
     };
+  }
+
+  /**
+   * Exporta el expediente completo en formato Excel nativo (.XLS / SpreadsheetML)
+   * con estilos visuales completos: encabezados con color, bordes de celda claramente delimitados,
+   * destacado cromático del mensaje del paciente y alertas rojas para emergencias.
+   */
+  async exportPatientExcelXls(patientId: string): Promise<{
+    filename: string;
+    xlsContent: string;
+  }> {
+    const sheet = await this.getPatientExcelSheet(patientId);
+    const patient = sheet.patient;
+    const now = this.formatDateTimeComponents(new Date());
+
+    const rowsHtml = sheet.rows
+      .map((row) => {
+        const dt = this.formatDateTimeComponents(row.timestamp);
+        const isEmergency = row.isEmergency;
+        const rowBg = isEmergency
+          ? '#fee2e2'
+          : row.rowNumber % 2 === 0
+            ? '#f8fafc'
+            : '#ffffff';
+        const patientVoice = `🗣️ ${row.symptomOrMessage.toUpperCase()}`;
+        const emergencyBadge = isEmergency
+          ? `<span style="background-color:#dc2626;color:#ffffff;padding:4px 8px;font-weight:bold;font-size:10pt;border-radius:4px;">🚨 ALERTA</span>`
+          : `<span style="color:#64748b;font-size:10pt;">Normal</span>`;
+        const statusBadge =
+          row.status === 'ATTENDED'
+            ? `<span style="background-color:#059669;color:#ffffff;padding:4px 8px;font-weight:bold;font-size:10pt;border-radius:4px;">✅ ATENDIDO</span>`
+            : `<span style="background-color:#d97706;color:#ffffff;padding:4px 8px;font-weight:bold;font-size:10pt;border-radius:4px;">⏳ PENDIENTE</span>`;
+
+        return `
+        <tr style="background-color:${rowBg};">
+          <td style="text-align:center;font-weight:bold;border:1px solid #cbd5e1;padding:8px 6px;">${row.rowNumber}</td>
+          <td style="text-align:center;border:1px solid #cbd5e1;padding:8px 6px;white-space:nowrap;">${dt.date}</td>
+          <td style="text-align:center;border:1px solid #cbd5e1;padding:8px 6px;white-space:nowrap;font-weight:600;">${dt.time}</td>
+          <td style="text-align:center;border:1px solid #cbd5e1;padding:8px 6px;font-size:10pt;">${this.translateShift(row.shift)}</td>
+          <td style="border:2px solid #0284c7;background-color:#f0f9ff;color:#0369a1;font-weight:bold;font-size:11.5pt;padding:10px 12px;">
+            ${patientVoice}
+          </td>
+          <td style="border:1px solid #cbd5e1;padding:8px 10px;font-weight:600;color:#334155;">${row.category}</td>
+          <td style="border:1px solid #cbd5e1;padding:8px 10px;color:#475569;font-size:10pt;">${row.clinicalDescription || ''}</td>
+          <td style="border:1px solid #cbd5e1;padding:8px 10px;color:#64748b;font-size:9.5pt;">${row.navigationBreadcrumb || 'Inicio'}</td>
+          <td style="text-align:center;border:1px solid #cbd5e1;padding:8px 6px;font-weight:bold;font-size:10pt;">${this.translateSeverity(row.severityLevel)}</td>
+          <td style="text-align:center;border:1px solid #cbd5e1;padding:8px 6px;">${emergencyBadge}</td>
+          <td style="border:1px solid #cbd5e1;padding:8px 10px;font-size:10pt;">${this.translateDevice(row.source)}</td>
+          <td style="text-align:center;border:1px solid #cbd5e1;padding:8px 6px;">${statusBadge}</td>
+          <td style="border:1px solid #cbd5e1;padding:8px 10px;font-weight:600;color:#1e293b;">${row.attendedByDoctorName || 'Pendiente'}</td>
+          <td style="border:1px solid #cbd5e1;padding:8px 10px;font-style:italic;color:#334155;">${row.doctorObservations || 'Sin observaciones registradas'}</td>
+        </tr>`;
+      })
+      .join('');
+
+    const xlsContent = `
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <!--[if gte mso 9]>
+  <xml>
+    <x:ExcelWorkbook>
+      <x:ExcelWorksheets>
+        <x:ExcelWorksheet>
+          <x:Name>Expediente Cama ${patient.bedNumber}</x:Name>
+          <x:WorksheetOptions>
+            <x:DisplayGridlines/>
+          </x:WorksheetOptions>
+        </x:ExcelWorksheet>
+      </x:ExcelWorksheets>
+    </x:ExcelWorkbook>
+  </xml>
+  <![endif]-->
+  <style>
+    body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; font-size: 11pt; color: #1e293b; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 24px; }
+    th { background-color: #0f172a; color: #ffffff; font-weight: bold; padding: 12px 8px; border: 1px solid #334155; text-align: center; font-size: 10.5pt; }
+    td { vertical-align: middle; }
+    .card-title { background-color: #0f766e; color: #ffffff; font-size: 14pt; font-weight: bold; text-align: center; padding: 14px; }
+    .card-label { font-weight: bold; color: #475569; background-color: #f1f5f9; padding: 8px 10px; border: 1px solid #cbd5e1; }
+    .card-val { color: #0f172a; font-weight: 600; padding: 8px 10px; border: 1px solid #cbd5e1; }
+  </style>
+</head>
+<body>
+  <table>
+    <tr>
+      <td colspan="14" class="card-title">
+        UNIDAD DE CUIDADOS INTENSIVOS (UCI) - EXPEDIENTE DIGITAL DE COMUNICACIÓN ASISTIDA<br/>
+        <span style="font-size:10.5pt;font-weight:normal;opacity:0.9;">SISTEMA INTELIGENTE DE MONITOREO Y RESPUESTA POR NODOS BINARIOS</span>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2" class="card-label">PACIENTE:</td>
+      <td colspan="4" class="card-val" style="font-size:12pt;font-weight:bold;color:#0f766e;">${patient.fullName.toUpperCase()}</td>
+      <td colspan="2" class="card-label">HISTORIA / CÉDULA:</td>
+      <td colspan="2" class="card-val">${patient.documentNumber}</td>
+      <td colspan="2" class="card-label">CAMA UCI:</td>
+      <td colspan="2" class="card-val" style="font-size:12pt;font-weight:bold;color:#b45309;">${patient.bedNumber}</td>
+    </tr>
+    <tr>
+      <td colspan="2" class="card-label">EDAD:</td>
+      <td colspan="4" class="card-val">${patient.age} años</td>
+      <td colspan="2" class="card-label">ESTADO DE GRAVEDAD:</td>
+      <td colspan="2" class="card-val" style="font-weight:bold;">${this.translateSeverity(patient.severityLevel)}</td>
+      <td colspan="2" class="card-label">ESTADO UCI:</td>
+      <td colspan="2" class="card-val">${patient.status}</td>
+    </tr>
+    <tr>
+      <td colspan="2" class="card-label">DIAGNÓSTICO:</td>
+      <td colspan="4" class="card-val">${patient.diagnosis}</td>
+      <td colspan="2" class="card-label">TIPO INTUBACIÓN:</td>
+      <td colspan="2" class="card-val">${patient.intubationType || 'Orotraqueal'}</td>
+      <td colspan="2" class="card-label">DISPOSITIVO ASIGNADO:</td>
+      <td colspan="2" class="card-val">${patient.deviceMode || 'Control + Proyector'}</td>
+    </tr>
+    <tr>
+      <td colspan="2" class="card-label">FECHA DE REPORTE:</td>
+      <td colspan="4" class="card-val">${now.date} ${now.time}</td>
+      <td colspan="2" class="card-label">TOTAL EVENTOS:</td>
+      <td colspan="2" class="card-val" style="font-weight:bold;">${sheet.summary.totalRows}</td>
+      <td colspan="2" class="card-label">ALERTAS DE EMERGENCIA:</td>
+      <td colspan="2" class="card-val" style="color:#dc2626;font-weight:bold;">${sheet.summary.criticalEventsCount}</td>
+    </tr>
+  </table>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 45px;">N°</th>
+        <th style="width: 95px;">FECHA</th>
+        <th style="width: 105px;">HORA</th>
+        <th style="width: 130px;">TURNO MÉDICO</th>
+        <th style="width: 290px; background-color: #0369a1; color: #ffffff;">MENSAJE EXPRESADO POR EL PACIENTE</th>
+        <th style="width: 180px;">CATEGORÍA CLÍNICA</th>
+        <th style="width: 240px;">DESCRIPCIÓN MÉDICA</th>
+        <th style="width: 200px;">RUTA BINARIA SEGUIDA</th>
+        <th style="width: 130px;">SEVERIDAD</th>
+        <th style="width: 110px;">¿EMERGENCIA?</th>
+        <th style="width: 170px;">DISPOSITIVO USADO</th>
+        <th style="width: 130px;">ESTADO</th>
+        <th style="width: 160px;">MÉDICO A CARGO</th>
+        <th style="width: 280px;">OBSERVACIONES MÉDICAS (NUBE)</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}
+    </tbody>
+  </table>
+</body>
+</html>`;
+
+    const sanitizedName = sheet.patient.fullName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_');
+
+    return {
+      filename: `expediente_uci_${sheet.patient.bedNumber}_${sanitizedName}.xls`,
+      xlsContent,
+    };
+  }
+
+  private formatDateTimeComponents(dateInput: Date | string) {
+    const d = new Date(dateInput);
+    if (isNaN(d.getTime())) {
+      return { date: 'N/A', time: 'N/A' };
+    }
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    let hours = d.getHours();
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const seconds = String(d.getSeconds()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    const hoursStr = String(hours).padStart(2, '0');
+    return {
+      date: `${day}/${month}/${year}`,
+      time: `${hoursStr}:${minutes}:${seconds} ${ampm}`,
+    };
+  }
+
+  private translateShift(shift?: MedicalShift | string): string {
+    switch (shift) {
+      case MedicalShift.MORNING:
+        return 'Mañana (06:00 - 14:00)';
+      case MedicalShift.AFTERNOON:
+        return 'Tarde (14:00 - 22:00)';
+      case MedicalShift.NIGHT:
+        return 'Noche (22:00 - 06:00)';
+      default:
+        return shift || 'No especificado';
+    }
+  }
+
+  private translateSeverity(severity?: SeverityLevel | string): string {
+    switch (severity) {
+      case SeverityLevel.CRITICAL:
+        return 'CRÍTICO';
+      case SeverityLevel.HIGH:
+        return 'ALTO';
+      case SeverityLevel.MEDIUM:
+        return 'MEDIO';
+      case SeverityLevel.LOW:
+        return 'BAJO';
+      default:
+        return severity || 'N/A';
+    }
+  }
+
+  private translateDevice(source?: InputSource | string): string {
+    if (source === InputSource.HARDWARE_CONTROLLER) {
+      return 'Control Físico + Proyector';
+    }
+    return 'Teléfono Móvil / Táctil';
   }
 
   /**

@@ -12,6 +12,7 @@ import {
   PatientDeviceMode,
   PatientIcuStatus,
 } from '../entities/patient.entity';
+import { SeverityLevel } from '../../binary-tree/entities/tree-node.entity';
 
 export class CreatePatientDto {
   @IsString()
@@ -53,6 +54,12 @@ export class CreatePatientDto {
   @IsOptional()
   @IsEnum(PatientIcuStatus)
   status?: PatientIcuStatus;
+
+  @IsOptional()
+  @IsEnum(SeverityLevel, {
+    message: 'El estado de gravedad debe ser LOW (Estable), MEDIUM (Moderado), HIGH (Grave) o CRITICAL (Crítico)',
+  })
+  severityLevel?: SeverityLevel;
 
   @IsOptional()
   @IsString()

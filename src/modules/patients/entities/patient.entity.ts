@@ -5,6 +5,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { SeverityLevel } from '../../binary-tree/entities/tree-node.entity';
 
 export enum IntubationType {
   ENDOTRACHEAL = 'ENDOTRACHEAL', // Tubo endotraqueal orotraqueal
@@ -70,6 +71,14 @@ export class Patient {
     default: PatientIcuStatus.ACTIVE_ICU,
   })
   status: PatientIcuStatus;
+
+  // Estado de gravedad clínica en la UCI (LOW: Estable, MEDIUM: Moderado, HIGH: Grave, CRITICAL: Crítico)
+  @Column({
+    type: 'enum',
+    enum: SeverityLevel,
+    default: SeverityLevel.HIGH,
+  })
+  severityLevel: SeverityLevel;
 
   @Column({ type: 'text', nullable: true })
   clinicalSummaryNotes: string;

@@ -12,6 +12,7 @@ import {
   PatientDeviceMode,
   PatientIcuStatus,
 } from '../entities/patient.entity';
+import { SeverityLevel } from '../../binary-tree/entities/tree-node.entity';
 
 export class UpdatePatientDto {
   @IsOptional()
@@ -47,6 +48,10 @@ export class UpdatePatientDto {
   @IsOptional()
   @IsEnum(PatientIcuStatus)
   status?: PatientIcuStatus;
+
+  @IsOptional()
+  @IsEnum(SeverityLevel)
+  severityLevel?: SeverityLevel;
 
   @IsOptional()
   @IsString()

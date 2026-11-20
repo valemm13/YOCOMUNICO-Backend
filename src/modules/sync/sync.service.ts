@@ -78,6 +78,20 @@ export class SyncService {
     return session;
   }
 
+  notifyLeafReached(payload: {
+    patientId: string;
+    isLeaf: boolean;
+    isEmergency: boolean;
+    title: string;
+    label?: string;
+    selectedNode?: unknown;
+  }): void {
+    this.emergencyGateway.emitLeafReachedToPatientDevice(
+      payload.patientId,
+      payload,
+    );
+  }
+
   getPatientDeviceSession(patientId: string): ActiveDeviceSession | null {
     return this.deviceSessions.get(patientId) ?? null;
   }
